@@ -208,7 +208,7 @@ Produce a **single TypeScript file** (`api-contract.ts`) using:
 - A generic `ApiResponse<T>` using a discriminated union on `responseCode: "ok" | "error"`.
 - An `ApiError` type using a discriminated union on `type`.
 - All domain types at the top level (not nested inside the namespace).
-- `lifecycle` as a top-level field on the name result object (not nested under `tokenOwner`).
+- `lifecycle` as a top-level field on the name result object.
 - Relations always returned in full regardless of query filter.
 
 **Style:**
@@ -222,5 +222,5 @@ Produce a **single TypeScript file** (`api-contract.ts`) using:
 ## Future Extensibility (encode as JSDoc comments in output)
 
 - `relations` query param may gain: `resolved_<coinType>`, `reverse_any`, `reverse_<chainId>`, `reverse_default`, `primary_any`, `primary_<chainId>`, `primary_default`
-- `Lifecycle.type` may gain new variants — clients must handle unknown values gracefully
+- `lifecycle.type` may gain new variants — clients must treat unknown values gracefully
 - Sibling endpoints planned: `/api/names/by-parent/:parentNode`, `/api/names/search`, `/api/names/primary/:address`
