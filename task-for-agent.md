@@ -26,18 +26,28 @@ GET /api/names/by-address/:address
 
 ### Query Parameters
 
-| Field                 | Type                   | Required | Default                               | Description |
-|-----------------------|------------------------|----------|---------------------------------------|-------------|
-| `chainId`             | string \| "any"        | No       | "any"                                 | Chain scope. "any" = no filter. Valid values: "1" (Ethereum), "8453" (Base), etc. |
-| `relations`           | string (CSV)           | No       | "token_owner,explicit_registry_owner" | Comma-separated distinct set of: `token_owner`, `explicit_registry_owner`, `resolved_any`. Errors on unknown or repeated values. |
-| `lifecycleStatus`     | string (CSV)           | No       | "any"                                 | Comma-sep filter. Options: `active`, `expiring_soon`, `released_grace`, `released_full`. Applies only to names with `lifecycle.type = "graced_expiry"`. Names with `lifecycle.type = "none"` or `"unknown"` are always included when this param is absent or "any". |
-| `expiringSoonDuration`| string                 | No       | "120d"                                | Duration format: `1s`, `30m`, `20h`, `2d`, `1y`. A name is `expiring_soon` if `now() > expiry - duration`. |
-| `sortBy`              | "name" \| "expiration" | No       | "name"                                | Sort field. See note on `expiration` sort for names with no lifecycle. |
-| `sortDirection`       | "asc" \| "desc"        | No       | "asc"                                 | |
-| `limit`               | integer (1–100)        | No       | 10                                    | Results per page. |
-| `cursor`              | string                 | No       | —                                     | Opaque cursor from previous response. |
+| Field             | Type                   | Required | Default                           | Description |
+|-------------------|------------------------|----------|-----------------------------------|-------------|
+| `chainId`         | string \| "any"        | No       | "any"                             | Chain scope. "any" = no filter. Valid values: "1" (Ethereum), "8453" (Base), etc. |
+| `relations`       | string (CSV)           | No       | "token_owner,root_registry_owner" | Comma-separated distinct set of: `token_owner`, `root_registry_owner`. Errors on unknown or repeated values. In future it's possible to add like `resolved_any`. |
+| `lifecycleStatus` | string (CSV)           | No       | "active,none,unknown"             | Comma-sep filter on lifecycle state. Options: `active`, `expiring_soon`, `released_grace`, `none`, `unknown`. See mapping below. |
+| `sortBy`          | "name" \| "expiration" | No       | "name"                            | Sort field. See note on `expiration` sort ordering for names with `lifecycle.type = "none"` or `"unknown"`. |
+| `sortDirection`   | "asc" \| "desc"        | No       | "asc"                             | |
+| `limit`           | integer (1–100)        | No       | 10                                | Results per page. |
+| `cursor`          | string                 | No       | —                                 | Opaque cursor from previous response. |
 
-> **Note on `sortBy=expiration`:** Names with `lifecycle.type = "none"` (no expiry) must be placed at a defined position — either always first or always last — when sorting by expiration. This policy must be captured in a JSDoc comment on the relevant type.
+**`lifecycleStatus` filter mapping to response structure:**
+- `active` → `lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "active"`
+- `expiring_soon` → `lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "active"` AND `lifecycle.status.expiringSoon = true`
+- `released_grace` → `lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "released_grace"`
+- `none` → `lifecycle.type = "none"` (covers names that never expire and names that are fully released)
+- `unknown` → `lifecycle.type = "unknown"`
+
+> **Note on `sortBy=expiration` ordering:** `lifecycle.type = "none"` (never expires) is treated as `∞` and follows the sort direction — last in `asc`, first in `desc`. `lifecycle.type = "unknown"` is always placed last regardless of sort direction, as it is missing data rather than a known infinite value.
+> Sort order for `asc`: known expiries ascending → `none` (∞) → `unknown`
+> Sort order for `desc`: `none` (∞) → known expiries descending → `unknown`
+
+> **Note on `expiring_soon` threshold:** The threshold for what counts as "expiring soon" is hardcoded server-side (~120 days). It is intentionally not exposed as a query param, and the exact threshold is not committed to in the API contract — it may change. Clients should rely on the `expiringSoon` boolean field rather than computing it themselves.
 
 ---
 
@@ -47,7 +57,7 @@ GET /api/names/by-address/:address
 
 Top-level shape:
 - `responseCode`: `"ok"`
-- `accurateAsOf`: Unix timestamp (seconds). All relative time fields (e.g. `expiresIn`) are anchored to this.
+- `accurateAsOf`: Unix timestamp (seconds). All relative time fields (`expiresIn`, `gracePeriodEndsIn`) are anchored to this value.
 - `names`: Array of name result objects (see below)
 - `pagination`: Pagination state
 
@@ -57,31 +67,13 @@ Each name has the following fields:
 
 ---
 
-#### `name` — discriminated union on `type`
+#### `name` — `InterpretedName`
 
-- `{ type: "known"; name: string }` — all labels are normalized and fully decoded.
-
-  Example: `{ type: "known", name: "vitalik.eth" }`
-
-- `{ type: "undecoded"; name: string; parts: NamePart[] }` — one or more labels are unknown (only their hash is available). The `name` field contains the stringified name using encoded labelhash notation (`[<hex>]` for unknown labels). The `parts` array has one entry per label (left to right), each with:
-  - `labelHash: string` — always present (keccak256 hash of the label)
-  - `label: string | null` — decoded label if known; `null` if unknown
-
-  Example:
-  ```json
-  {
-    "type": "undecoded",
-    "name": "[4f5b8...91234].eth",
-    "parts": [
-      { "labelHash": "0x4f5b812789fc606be1b3b16908db13fc...", "label": null },
-      { "labelHash": "0x93cdeb708b7545dc668eb9280176169d...", "label": "eth" }
-    ]
-  }
-  ```
+A `string` with special formatting guarantees: every label is either a normalized label or an encoded labelhash in `[<hex>]` notation. Full definition: https://ensnode.io/docs/reference/terminology/#interpreted-name
 
 ---
 
-#### `domainId` — `Namehash`
+#### `domainId` — `Node`
 
 Namehash of the domain. Unique deterministic identifier. Always lowercase hex.
 
@@ -92,63 +84,92 @@ Namehash of the domain. Unique deterministic identifier. Always lowercase hex.
 Always returns all known relations for the name regardless of which `relations` query param was passed. Contains:
 
 - **`resolved`**: `Record<CoinType, { type: "known"; address: Address } | { type: "none" }>`
-  Map of SLIP-44 coinType string → resolution state. Each value is either a confirmed address (`"known"`) or confirmed unset (`"none"`). The map only includes coin types we have indexed; absence of a key means no data for that coin type.
+  Map of SLIP-44 coinType string → resolution state. Each entry is either a confirmed address (`"known"`) or confirmed unset (`"none"`). The map only includes coin types we have indexed; absence of a key means no data for that coin type. 
+  
+  > NOTE: Do not implement in this version — include the type definition only, for future proofing.
 
-- **`tokenOwner`**: discriminated union on `type`
-  NFT ownership. Three possible states:
-  - `{ type: "known"; address: Address }` — confirmed owner
-  - `{ type: "none" }` — confirmed no owner (zero address, burned token, or no token exists)
-  - `{ type: "unknown" }` — cannot determine (e.g., not yet indexed for this chain/name)
-
-  > Only `tokenOwner` has the `"unknown"` variant for now; other relation fields do not.
-
-- **`explicitRegistryOwner`**: discriminated union on `type`
-  ENS registry owner:
+- **`rootRegistryOwner`**: discriminated union on `type`
+  ENS root registry owner:
   - `{ type: "known"; address: Address }` — registry owner is set
   - `{ type: "none" }` — confirmed not set
+
+- **`tokenOwner`**: discriminated union on `type` — represents NFT ownership.
+
+  Three variants:
+
+  **`{ type: "known"; address: Address; token: TokenInfo }`**
+  The token is known to exist and has not expired. The API must coerce expired-but-still-indexed tokens to `"none"` — the contract says there is no owner the moment a token expires, even if there is no on-chain event removing the token_owner.
+
+  **`{ type: "none" }`**
+  Confirmed no current token owner. Covers: zero address, burned token, expired token, or name never tokenized.
+
+  **`{ type: "unknown" }`**
+  Cannot determine ownership — either impossible right now or not yet implemented.
+
+  > Only `tokenOwner` has the `"unknown"` variant; other relation fields do not.
+
+---
+
+##### `TokenInfo` (included on `tokenOwner.type = "known"`)
+
+Fields from the underlying token record:
+- `id: string` — CAIP-19 Asset Identifier (e.g. `"eip155:1/erc721:0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85/12345"`)
+- `chainId: ChainId`
+- `contractAddress: Address`
+- `tokenId: string` — bigint serialized as string
+- `assetNamespace: string` — e.g. `"erc721"`
 
 ---
 
 #### `lifecycle` — discriminated union on `type`
 
+Describes the name's registration lifecycle.
+
 ```
 type Lifecycle =
   | { type: "none" }
   | { type: "unknown" }
-  | LifecycleGracedExpiry
-  // NOTE: clients MUST support receiving new `type` values in the future. If client does not know how to handle a new type, it must consider it as "unknown".
+  | { type: "graced_expiry"; status: GracedExpiryStatus }
+  // NOTE: clients MUST support receiving new `type` considering them as "unknown"
 ```
 
-**Variants:**
+**`{ type: "none" }`**
+We know this name has no lifecycle — it either never expires or not registered at all.
+Example: the TLD "eth" itself.
 
-1. **`{ type: "none" }`**
-   We know this name has no lifecycle — it never expires.
-   Example: the TLD "eth" itself.
+**`{ type: "unknown" }`**
+We don't know the lifecycle, or we haven't implemented handling for it yet.
+Examples: "box", "gift.box", unwrapped subnames like "abc.lev.eth"
 
-2. **`{ type: "unknown" }`**
-   We don't know the lifecycle, or we haven't implemented handling for it yet.
-   Examples: "box", "gift.box", unwrapped subnames like "abc.lev.eth"
+This is also the fallback value SDK clients should use when they receive a `type` value they don't recognize — treat any unknown future variant as `"unknown"` for display and filtering purposes.
 
-3. **`{ type: "graced_expiry"; status: ...; expiry: ...; gracePeriod: ... }`**
-   ENSv1 `.eth` base registry lifecycle — the name has a known expiry date AND a grace period after expiry before it is fully released.
-   Examples: "lev.eth", wrapped subnames like "abc.lev.eth"
+**`{ type: "graced_expiry"; status: GracedExpiryStatus }`**
+ENSv1 `.eth` base registry lifecycle — the name has a known expiry date AND a grace period after expiry before it is fully released.
+Examples: "lev.eth", wrapped subnames like "abc.lev.eth"
 
-   Fields:
-   - `status`: current state — one of:
-     - `"active"` — registered and not expiring soon
-     - `"expiring_soon"` — within `expiringSoonDuration` of expiry
-     - `"released_grace"` — expired; original owner can still re-register (grace period active)
-     - `"released_full"` — grace period ended; anyone can register
-   - `expiry`: `{ expiresAt: UnixTimestamp; expiresIn: number }` — `expiresIn` is seconds from `accurateAsOf`; negative if already expired
-   - `gracePeriod`: `{ gracePeriodEndsAt: UnixTimestamp; gracePeriodEndsIn: number }`
+---
+
+##### `GracedExpiryStatus` — discriminated union on `type`
+
+**`{ type: "active"; expiresAt: UnixTimestamp; expiresIn: number; expiringSoon: boolean }`**
+Name is currently registered and not expired.
+- `expiresAt` — absolute expiry timestamp
+- `expiresIn` — seconds from `accurateAsOf`; always positive in this variant
+- `expiringSoon` — true if within the server-defined threshold of expiry (~120 days). Exact threshold is not committed to in the contract.
+
+**`{ type: "released_grace"; previousTokenOwner: Address; gracePeriodEndsAt: UnixTimestamp; gracePeriodEndsIn: number }`**
+Name has expired but is still within its grace period. No `expiresIn` field — it would be negative (name already expired), so it is omitted.
+- `previousTokenOwner` — address who held the token before it expired
+- `gracePeriodEndsAt` — absolute timestamp when grace period ends
+- `gracePeriodEndsIn` — seconds from `accurateAsOf` until grace period ends
 
 ---
 
 ### Pagination
 
-- `limit`: `number`
-- `cursor`: `string | null` — opaque next-page cursor; `null` if no next page
-- `hasMore`: `boolean`
+- `limit: number`
+- `cursor: string | null` — opaque next-page cursor; `null` if no next page
+- `hasMore: boolean`
 
 ---
 
@@ -169,15 +190,11 @@ type Lifecycle =
 type Address = string;         // 20-byte hex, checksummed or not
 type UnixTimestamp = number;   // seconds since epoch
 type ChainId = string;         // e.g. "1", "8453"
-type Namehash = string;        // lowercase 32-byte hex
+type Node = string;            // lowercase 32-byte hex (namehash)
 type CoinType = string;        // SLIP-44 numeric string, e.g. "60" = ETH
-type DurationString = string;  // e.g. "120d", "30m", "1y"
 type Cursor = string;          // opaque pagination cursor
 
-type NamePart = {
-  labelHash: string;    // keccak256 hash of the label
-  label: string | null; // decoded label, or null if unknown
-};
+type InterpretedName = string; // string with special label-formatting guarantees
 ```
 
 ---
@@ -191,7 +208,7 @@ Produce a **single TypeScript file** (`api-contract.ts`) using:
 - A generic `ApiResponse<T>` using a discriminated union on `responseCode: "ok" | "error"`.
 - An `ApiError` type using a discriminated union on `type`.
 - All domain types at the top level (not nested inside the namespace).
-- Lifecycle as a proper discriminated union with JSDoc on each variant.
+- `lifecycle` as a top-level field on the name result object (not nested under `tokenOwner`).
 - Relations always returned in full regardless of query filter.
 
 **Style:**
@@ -205,5 +222,5 @@ Produce a **single TypeScript file** (`api-contract.ts`) using:
 ## Future Extensibility (encode as JSDoc comments in output)
 
 - `relations` query param may gain: `resolved_<coinType>`, `reverse_any`, `reverse_<chainId>`, `reverse_default`, `primary_any`, `primary_<chainId>`, `primary_default`
-- `lifecycle.type` may gain new variants — clients must treat unknown values gracefully
+- `Lifecycle.type` may gain new variants — clients must handle unknown values gracefully
 - Sibling endpoints planned: `/api/names/by-parent/:parentNode`, `/api/names/search`, `/api/names/primary/:address`
