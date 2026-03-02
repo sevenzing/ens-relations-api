@@ -28,7 +28,7 @@ GET /api/names/by-address/:address
 
 | Field             | Type                   | Required | Default                           | Description |
 |-------------------|------------------------|----------|-----------------------------------|-------------|
-| `chainId`         | string \| "any"        | No       | "any"                             | Chain scope. "any" = no filter. Valid values: "1" (Ethereum), "8453" (Base), etc. |
+| `chainId`         | string \| "any"        | No       | "any"                             | Chain scope. "any" = no filter. Valid values: "1" (Ethereum), "8453" (Base), etc. **Not implemented in this version — future-proof only.** |
 | `relations`       | string (CSV)           | No       | "token_owner,root_registry_owner" | Comma-separated distinct set of: `token_owner`, `root_registry_owner`. Errors on unknown or repeated values. In future it's possible to add like `resolved_any`. |
 | `lifecycleStatus` | string (CSV)           | No       | "active,none,unknown"             | Comma-sep filter on lifecycle state. Options: `active`, `expiring_soon`, `released_grace`, `none`, `unknown`. See mapping below. |
 | `sortBy`          | "name" \| "expiration" | No       | "name"                            | Sort field. See note on `expiration` sort ordering for names with `lifecycle.type = "none"` or `"unknown"`. |
@@ -83,25 +83,28 @@ Namehash of the domain. Unique deterministic identifier. Always lowercase hex.
 
 Always returns all known relations for the name regardless of which `relations` query param was passed. Contains:
 
-- **`resolved`**: `Record<CoinType, { type: "known"; address: Address } | { type: "none" }>`
-  Map of SLIP-44 coinType string → resolution state. Each entry is either a confirmed address (`"known"`) or confirmed unset (`"none"`). The map only includes coin types we have indexed; absence of a key means no data for that coin type. 
+- **`resolved`**: `Record<CoinType, { type: "active"; address: Address } | { type: "none" }>`
+  Map of SLIP-44 coinType string → resolution state. Each entry is either a confirmed address (`"active"`) or confirmed unset (`"none"`). The map only includes coin types we have indexed; absence of a key means no data for that coin type. 
   
   > NOTE: Do not implement in this version — include the type definition only, for future proofing.
 
 - **`rootRegistryOwner`**: discriminated union on `type`
   ENS root registry owner:
-  - `{ type: "known"; address: Address }` — registry owner is set
-  - `{ type: "none" }` — confirmed not set
+  - `{ type: "active"; owner: Account }` — root registry owner is the specified address
+  - `{ type: "none" }` — confirmed no root registry owner. Note that the name may still exist and be resolvable as a result of ENSIP-10 and ENS wildcard resolution.
 
 - **`tokenOwner`**: discriminated union on `type` — represents NFT ownership.
 
   Three variants:
 
-  **`{ type: "known"; address: Address; token: TokenInfo }`**
-  The token is known to exist and has not expired. The API must coerce expired-but-still-indexed tokens to `"none"` — the contract says there is no owner the moment a token expires, even if there is no on-chain event removing the token_owner.
+  **`{ type: "active"; owner: Account; token: TokenInfo }`**
+  The token exists and has not expired.
+
+  **`{ type: "released_grace"; previousOwner: Account; token: TokenInfo }`**
+  The token has expired but the name is still within its grace period. The previous owner retains a priority claim to re-register. Shares the same token metadata structure as `"active"`.
 
   **`{ type: "none" }`**
-  Confirmed no current token owner. Covers: zero address, burned token, expired token, or name never tokenized.
+  Confirmed no current token owner. Covers: zero address, burned token, fully released (past grace period), or name never tokenized.
 
   **`{ type: "unknown" }`**
   Cannot determine ownership — either impossible right now or not yet implemented.
@@ -110,12 +113,11 @@ Always returns all known relations for the name regardless of which `relations` 
 
 ---
 
-##### `TokenInfo` (included on `tokenOwner.type = "known"`)
+##### `TokenInfo` (included on `tokenOwner.type = "active"` and `"released_grace"`)
 
 Fields from the underlying token record:
 - `id: string` — CAIP-19 Asset Identifier (e.g. `"eip155:1/erc721:0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85/12345"`)
-- `chainId: ChainId`
-- `contractAddress: Address`
+- `contract: Account` — chain and contract address of the token contract
 - `tokenId: string` — bigint serialized as string
 - `assetNamespace: string` — e.g. `"erc721"`
 
@@ -134,7 +136,7 @@ type Lifecycle =
 ```
 
 **`{ type: "none" }`**
-We know this name has no lifecycle — it either never expires or not registered at all.
+We know this name has no lifecycle — it never expires.
 Example: the TLD "eth" itself.
 
 **`{ type: "unknown" }`**
@@ -195,6 +197,8 @@ type CoinType = string;        // SLIP-44 numeric string, e.g. "60" = ETH
 type Cursor = string;          // opaque pagination cursor
 
 type InterpretedName = string; // string with special label-formatting guarantees
+
+type Account = { chainId: number; address: Address }; // chain-scoped address
 ```
 
 ---

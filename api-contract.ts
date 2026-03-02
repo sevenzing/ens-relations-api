@@ -27,16 +27,19 @@ export type Cursor = string;
  */
 export type InterpretedName = string;
 
+/** Chain-scoped Ethereum address */
+export type Account = { chainId: number; address: Address };
+
 // ============================================================
 // Token Info
 // ============================================================
 
-/** Metadata for the NFT token associated with a name (present when tokenOwner.type = "known") */
+/** Metadata for the NFT token associated with a name (present when tokenOwner.type = "active" or "released_grace") */
 export type TokenInfo = {
   /** CAIP-19 Asset Identifier, e.g. "eip155:1/erc721:0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85/12345" */
   id: string;
-  chainId: ChainId;
-  contractAddress: Address;
+  /** Chain and contract address of the token contract */
+  contract: Account;
   /** Token ID serialized as a decimal string (bigint-safe) */
   tokenId: string;
   /** Asset namespace, e.g. "erc721" */
@@ -50,33 +53,34 @@ export type TokenInfo = {
 export type Relations = {
   /**
    * Map of SLIP-44 coinType → resolution state.
-   * Each entry is either a confirmed address (`"known"`) or confirmed unset (`"none"`).
+   * Each entry is either a confirmed address (`"active"`) or confirmed unset (`"none"`).
    * Absence of a key means no indexed data for that coin type.
    *
    * NOTE: Not implemented in this version — included for future-proofing only.
    */
-  resolved: Record<CoinType, { type: "known"; address: Address } | { type: "none" }>;
+  resolved: Record<CoinType, { type: "active"; address: Address } | { type: "none" }>;
 
   /**
    * ENS root registry owner.
-   *   - "known" — registry owner is set
-   *   - "none"  — confirmed not set
+   *   - "active" — root registry owner is the specified address
+   *   - "none"   — confirmed no root registry owner; name may still be resolvable
+   *                via ENSIP-10 wildcard resolution
    */
-  rootRegistryOwner: { type: "known"; address: Address } | { type: "none" };
+  rootRegistryOwner: { type: "active"; owner: Account } | { type: "none" };
 
   /**
    * NFT ownership state.
-   *   - "known"   — token exists and has not expired; includes token metadata
-   *   - "none"    — confirmed no current owner (zero address, burned, expired, or never tokenized)
-   *   - "unknown" — cannot determine ownership; not yet implemented or impossible to resolve
-   *
-   * The API coerces expired-but-still-indexed tokens to `"none"` — there is no owner
-   * the moment a token expires, even without an on-chain removal event.
+   *   - "active"         — token exists and has not expired; previous owner retains no special claim
+   *   - "released_grace" — token has expired but is still within its grace period;
+   *                        the previous owner retains a priority claim to re-register
+   *   - "none"           — confirmed no current owner (zero address, burned, fully released, or never tokenized)
+   *   - "unknown"        — cannot determine ownership; not yet implemented or impossible to resolve
    *
    * Only `tokenOwner` has the `"unknown"` variant; other relation fields do not.
    */
   tokenOwner:
-    | { type: "known"; address: Address; token: TokenInfo }
+    | { type: "active"; owner: Account; token: TokenInfo }
+    | { type: "released_grace"; previousOwner: Account; token: TokenInfo }
     | { type: "none" }
     | { type: "unknown" };
 };
