@@ -92,9 +92,13 @@ export type Relations = {
 /**
  * ENSv1 graced-expiry lifecycle status — discriminated union on `type`.
  *
- * - "active"         — name is currently registered and not expired
+ * - "active"         — name is currently registered and the token has not expired
  * - "released_grace" — name has expired but is still within its grace period;
  *                      `expiresIn` is omitted (would be negative)
+ * - "available"      — name is available for registration (never registered, or fully
+ *                      released after its grace period ended); no additional fields
+ *
+ * NOTE: New variants may be added — clients must treat unknown values gracefully.
  */
 export type GracedExpiryStatus =
   | {
@@ -118,23 +122,29 @@ export type GracedExpiryStatus =
       gracePeriodEndsAt: UnixTimestamp;
       /** Seconds from `accurateAsOf` until grace period ends */
       gracePeriodEndsIn: number;
+    }
+  | {
+      type: "available";
     };
 
 /**
  * Discriminated union representing the lifecycle of an ENS name.
  *
  * Variants:
- *   - "none"          — We know the name has no lifecycle; it never expires (e.g. the TLD "eth").
+ *   - "indefinite"    — We know this name never expires; it has no expiry date by design
+ *                       (e.g. the TLD "eth").
  *   - "unknown"       — We don't know the lifecycle or haven't implemented handling yet
  *                       (e.g. "box", "gift.box", unwrapped subnames like "abc.lev.eth").
- *   - "graced_expiry" — ENSv1 .eth lifecycle: known expiry date + grace period after expiry.
+ *   - "graced_expiry" — ENSv1 .eth base registry lifecycle. All direct subnames of `.eth`
+ *                       have this type regardless of registration status — the type is fixed,
+ *                       only the status varies (e.g. "vitalik.eth", "nrg.eth", "crazy.eth").
  *
  * NOTE: Clients MUST handle unknown `type` values gracefully — new variants may be added in
  * future API versions without a breaking change. Treat any unrecognized type as "unknown"
  * for display and filtering purposes.
  */
 export type Lifecycle =
-  | { type: "none" }
+  | { type: "indefinite" }
   | { type: "unknown" }
   | { type: "graced_expiry"; status: GracedExpiryStatus };
 
@@ -227,14 +237,16 @@ export type RelationFilter = "token_owner" | "root_registry_owner";
  *   - "active"         → lifecycle.type = "graced_expiry" AND status.type = "active"
  *   - "expiring_soon"  → lifecycle.type = "graced_expiry" AND status.type = "active" AND status.expiringSoon = true
  *   - "released_grace" → lifecycle.type = "graced_expiry" AND status.type = "released_grace"
- *   - "none"           → lifecycle.type = "none"
+ *   - "available"      → lifecycle.type = "graced_expiry" AND status.type = "available"
+ *   - "indefinite"     → lifecycle.type = "indefinite"
  *   - "unknown"        → lifecycle.type = "unknown"
  */
 export type LifecycleStatusFilter =
   | "active"
   | "expiring_soon"
   | "released_grace"
-  | "none"
+  | "available"
+  | "indefinite"
   | "unknown";
 
 // ============================================================
@@ -278,14 +290,15 @@ export namespace Endpoints {
 
       /**
        * Comma-separated lifecycle status filter.
-       * Options: active, expiring_soon, released_grace, none, unknown.
-       * @default "active,none,unknown"
+       * Options: active, expiring_soon, released_grace, available, indefinite, unknown.
+       * @default "active,expiring_soon,indefinite,unknown"
        *
        * Mapping to response structure:
        *   - active         → lifecycle.type = "graced_expiry" AND status.type = "active"
        *   - expiring_soon  → graced_expiry + active + expiringSoon = true
        *   - released_grace → lifecycle.type = "graced_expiry" AND status.type = "released_grace"
-       *   - none           → lifecycle.type = "none"
+       *   - available      → lifecycle.type = "graced_expiry" AND status.type = "available"
+       *   - indefinite     → lifecycle.type = "indefinite"
        *   - unknown        → lifecycle.type = "unknown"
        */
       lifecycleStatus?: string;
@@ -294,10 +307,10 @@ export namespace Endpoints {
        * Field to sort results by.
        *
        * When `sortBy = "expiration"`:
-       *   - "none" (never expires) is treated as ∞ — last in asc, first in desc.
+       *   - "indefinite" (never expires) is treated as ∞ — last in asc, first in desc.
        *   - "unknown" is always placed last regardless of direction (missing data, not ∞).
-       *   Sort order asc:  known expiries ascending → none (∞) → unknown
-       *   Sort order desc: none (∞) → known expiries descending → unknown
+       *   Sort order asc:  known expiries ascending → indefinite (∞) → unknown
+       *   Sort order desc: indefinite (∞) → known expiries descending → unknown
        *
        * @default "name"
        */
