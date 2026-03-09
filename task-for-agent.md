@@ -30,18 +30,17 @@ GET /api/names/by-address/:address
 |-------------------|------------------------|----------|----------------------------------------|-------------|
 | `chainId`         | string \| "any"        | No       | "any"                                  | Chain scope. "any" = no filter. Valid values: "1" (Ethereum), "8453" (Base), etc. **Not implemented in this version — future-proof only.** |
 | `relations`       | string (CSV)           | No       | "token_owner,root_registry_owner"      | Comma-separated distinct set of: `token_owner`, `root_registry_owner`. Errors on unknown or repeated values. In future it's possible to add like `resolved_any`. |
-| `lifecycleStatus` | string (CSV)           | No       | "active,expiring_soon,indefinite,unknown" | Comma-sep filter on lifecycle state. Options: `active`, `expiring_soon`, `released_grace`, `available`, `indefinite`, `unknown`. See mapping below. |
+| `lifecycleFilter` | string (CSV)           | No       | "active,expiring_soon,unknown" | Comma-sep filter on lifecycle state. Options: `active`, `expiring_soon`, `released_grace`, `available`, `unknown`. See mapping below. |
 | `sortBy`          | "name" \| "expiration" | No       | "name"                                 | Sort field. See note on `expiration` sort ordering for names with `lifecycle.type = "indefinite"` or `"unknown"`. |
 | `sortDirection`   | "asc" \| "desc"        | No       | "asc"                                  | |
 | `limit`           | integer (1–100)        | No       | 10                                     | Results per page. |
 | `cursor`          | string                 | No       | —                                      | Opaque cursor from previous response. |
 
-**`lifecycleStatus` filter mapping to response structure:**
-- `active` → `lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "active"`
+**`lifecycleFilter` mapping to response structure:**
+- `active` → `lifecycle.type = "indefinite"` OR (`lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "active"`)
 - `expiring_soon` → `lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "active"` AND `lifecycle.status.expiringSoon = true`
 - `released_grace` → `lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "released_grace"`
 - `available` → `lifecycle.type = "graced_expiry"` AND `lifecycle.status.type = "available"`
-- `indefinite` → `lifecycle.type = "indefinite"`
 - `unknown` → `lifecycle.type = "unknown"`
 
 > **Note on `sortBy=expiration` ordering:** `lifecycle.type = "indefinite"` (never expires) is treated as `∞` and follows the sort direction — last in `asc`, first in `desc`. `lifecycle.type = "unknown"` is always placed last regardless of sort direction, as it represents missing data rather than a known value.

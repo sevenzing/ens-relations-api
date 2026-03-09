@@ -231,22 +231,20 @@ export type ApiResponse<T> =
 export type RelationFilter = "token_owner" | "root_registry_owner";
 
 /**
- * `lifecycleStatus` filter values.
+ * `lifecycleFilter` query param values.
  *
  * Maps to response structure:
- *   - "active"         → lifecycle.type = "graced_expiry" AND status.type = "active"
+ *   - "active"         → lifecycle.type = "indefinite" OR (lifecycle.type = "graced_expiry" AND status.type = "active")
  *   - "expiring_soon"  → lifecycle.type = "graced_expiry" AND status.type = "active" AND status.expiringSoon = true
  *   - "released_grace" → lifecycle.type = "graced_expiry" AND status.type = "released_grace"
  *   - "available"      → lifecycle.type = "graced_expiry" AND status.type = "available"
- *   - "indefinite"     → lifecycle.type = "indefinite"
  *   - "unknown"        → lifecycle.type = "unknown"
  */
-export type LifecycleStatusFilter =
+export type LifecycleFilter =
   | "active"
   | "expiring_soon"
   | "released_grace"
   | "available"
-  | "indefinite"
   | "unknown";
 
 // ============================================================
@@ -289,19 +287,18 @@ export namespace Endpoints {
       relations?: string;
 
       /**
-       * Comma-separated lifecycle status filter.
-       * Options: active, expiring_soon, released_grace, available, indefinite, unknown.
-       * @default "active,expiring_soon,indefinite,unknown"
+       * Comma-separated lifecycle filter.
+       * Options: active, expiring_soon, released_grace, available, unknown.
+       * @default "active,expiring_soon,unknown"
        *
        * Mapping to response structure:
-       *   - active         → lifecycle.type = "graced_expiry" AND status.type = "active"
+       *   - active         → lifecycle.type = "indefinite" OR (graced_expiry AND status.type = "active")
        *   - expiring_soon  → graced_expiry + active + expiringSoon = true
        *   - released_grace → lifecycle.type = "graced_expiry" AND status.type = "released_grace"
        *   - available      → lifecycle.type = "graced_expiry" AND status.type = "available"
-       *   - indefinite     → lifecycle.type = "indefinite"
        *   - unknown        → lifecycle.type = "unknown"
        */
-      lifecycleStatus?: string;
+      lifecycleFilter?: string;
 
       /**
        * Field to sort results by.
