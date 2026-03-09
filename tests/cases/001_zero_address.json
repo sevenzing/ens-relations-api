@@ -1,0 +1,20 @@
+{
+    "request": {
+        "method": "GET",
+        "path": "/api/names/by-address/0x0000000000000000000000000000000000000000",
+        "simulateAccurateAsOf": 1751709600
+    },
+    "response": {
+        "status": 200,
+        "body": {
+            "responseCode": "ok",
+            "accurateAsOf": 1751709600,
+            "names": [],
+            "pagination": {
+                "limit": 10,
+                "hasMore": false,
+                "cursor": null
+            }
+        }
+    }
+}
